@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Instagram Follow Tracker</title>
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <img src="icons/icon48.png" alt="" width="32" height="32">
+      <div>
+        <h1>Follow Tracker</h1>
+        <div class="sub" id="accountLine">עדיין לא בוצעה סריקה</div>
+      </div>
+    </div>
+    <div class="actions">
+      <select id="accountSelect" hidden></select>
+      <button id="scanBtn" class="primary">סרוק עכשיו</button>
+      <button id="restartBtn" hidden>התחל מחדש</button>
+      <button id="pauseBtn" hidden>השהה</button>
+      <button id="cancelBtn" hidden>עצור</button>
+    </div>
+  </header>
+
+  <section id="progress" class="progress" hidden>
+    <div class="progress-text" id="progressText"></div>
+    <div class="bar"><div class="fill" id="progressFill"></div></div>
+  </section>
+
+  <div id="message" class="message" hidden></div>
+  <div id="notice" class="message" hidden></div>
+
+  <section class="stats" id="stats"></section>
+
+  <nav class="tabs" id="tabs"></nav>
+
+  <section class="toolbar">
+    <input id="search" type="search" placeholder="חיפוש לפי שם משתמש או שם…">
+    <label class="chk"><input type="checkbox" id="hideVerified"> הסתר חשבונות מאומתים</label>
+    <button id="exportBtn">ייצוא CSV</button>
+  </section>
+
+  <p class="hint" id="tabHint"></p>
+  <main id="list" class="list"></main>
+  <div class="more"><button id="moreBtn" hidden>הצג עוד</button></div>
+
+  <footer class="foot">
+    הנתונים נשמרים רק בדפדפן שלך. סריקות תכופות מדי עלולות לגרום לאינסטגרם להגביל את החשבון זמנית — מומלץ לסרוק פעם ביום לכל היותר.
+    <button id="clearBtn" class="link">מחק את כל הנתונים</button>
+  </footer>
+
+  <script src="lib/core.js"></script>
+  <script src="dashboard.js"></script>
+</body>
+</html>

@@ -17,11 +17,23 @@ chrome.action.onClicked.addListener(async () => {
 // Actions taken in the mobile app are not visible here; the next scan catches them.
 let queue = Promise.resolve();
 
+// Unfollows started from the dashboard are verified and saved by the dashboard
+// itself, so the raw network request must not be taken as proof here.
+const handledByDashboard = new Map(); // user id -> expiry time
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg && msg.type === 'igft-expect-unfollow') {
+    handledByDashboard.set(String(msg.id), Date.now() + 2 * 60 * 1000);
+    sendResponse({ ok: true });
+  }
+});
+
 chrome.webRequest.onCompleted.addListener(
   (details) => {
     if (details.method !== 'POST' || details.statusCode !== 200) return;
     const hit = IGFT.parseFriendshipUrl(details.url);
     if (!hit) return;
+    const until = handledByDashboard.get(hit.id);
+    if (until && until > Date.now()) return;
     // Serialise updates so two quick clicks don't overwrite each other.
     queue = queue.then(() => applyLive(hit)).catch((e) => console.warn('IGFT live update failed', e));
   },

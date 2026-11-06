@@ -90,3 +90,9 @@ test('applyLiveChange updates lists immediately and is idempotent', () => {
   const { newEvents } = applyScan(a, { users: {}, followers: ['1', '2'], following: ['2'] }, 100);
   assert.strictEqual(newEvents.length, 0);
 });
+
+test('Hebrew and English have the same UI strings', () => {
+  const { STRINGS, t } = require('../lib/i18n.js');
+  assert.deepStrictEqual(Object.keys(STRINGS.he).sort(), Object.keys(STRINGS.en).sort());
+  assert.match(t('unfollowError', { name: '@x', why: 'y' }), /@x.*y/);
+});

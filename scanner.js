@@ -234,39 +234,95 @@
     }
   }
 
-  // Same request the site sends when you press "Unfollow" on a profile.
-  async function unfollow(id) {
-    if (!/^\d+$/.test(String(id))) return { ok: false, message: 'bad id' };
-    let res;
-    let data = null;
+  // ---------- unfollow ----------
+  // Instagram has moved its unfollow endpoint over time, and a 200 "ok" alone
+  // has proven not to mean the unfollow happened. So each known endpoint is
+  // tried in turn, and after each one the profile is re-read to confirm that
+  // you no longer follow the account.
+  const UNFOLLOW_ENDPOINTS = [
+    (id) => `/api/v1/web/friendships/${id}/unfollow/`,
+    (id) => `/web/friendships/${id}/unfollow/`,
+    (id) => `/api/v1/friendships/destroy/${id}/`,
+  ];
+
+  const postHeaders = () => ({
+    'X-IG-App-ID': APP_ID,
+    'X-CSRFToken': cookie('csrftoken'),
+    'X-Requested-With': 'XMLHttpRequest',
+    'X-Instagram-AJAX': '1',
+    'X-ASBD-ID': '129477',
+    'Content-Type': 'application/x-www-form-urlencoded',
+  });
+
+  // true = still following, false = not following, null = couldn't tell.
+  async function stillFollowing(username) {
+    if (!username) return null;
     try {
-      res = await fetch(`/api/v1/friendships/destroy/${id}/`, {
-        method: 'POST',
+      const res = await fetch(`/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`, {
         credentials: 'include',
-        headers: {
-          'X-IG-App-ID': APP_ID,
-          'X-CSRFToken': cookie('csrftoken'),
-          'X-Requested-With': 'XMLHttpRequest',
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: new URLSearchParams({ user_id: String(id), container_module: 'profile' }),
+        headers: { 'X-IG-App-ID': APP_ID, 'X-Requested-With': 'XMLHttpRequest' },
+        cache: 'no-store',
       });
-      data = await res.json();
+      if (!res.ok) return null;
+      const u = (await res.json()).data.user;
+      if (typeof u.followed_by_viewer !== 'boolean') return null;
+      return u.followed_by_viewer || !!u.requested_by_viewer;
     } catch {
-      // network error or non-JSON (e.g. logged out)
+      return null;
     }
-    if (res && res.ok && data && data.status === 'ok') return { ok: true };
-    return {
-      ok: false,
-      status: res ? res.status : 0,
-      blocked: !!(data && (data.feedback_required || data.spam || /feedback|block|wait/i.test(data.message || ''))),
-      message: (data && (data.feedback_message || data.message)) || (res ? 'HTTP ' + res.status : 'network error'),
-    };
+  }
+
+  async function unfollow(id, username) {
+    if (!/^\d+$/.test(String(id))) return { ok: false, message: 'bad id' };
+    const attempts = [];
+    let acceptedButUnverified = false;
+    for (const endpoint of UNFOLLOW_ENDPOINTS) {
+      const url = endpoint(id);
+      let res = null;
+      let data = null;
+      try {
+        res = await fetch(url, {
+          method: 'POST',
+          credentials: 'include',
+          headers: postHeaders(),
+          body: new URLSearchParams({ user_id: String(id), container_module: 'profile', nav_chain: '' }),
+        });
+        data = await res.json();
+      } catch {
+        // network error or non-JSON reply
+      }
+      const status = res ? res.status : 0;
+      const msg = (data && (data.feedback_message || data.message)) || '';
+      attempts.push(`${url.replace(/\d+/, '{id}')} → ${status}${data && data.status ? ' ' + data.status : ''}${msg ? ' ' + msg : ''}`);
+
+      if (status === 429 || (data && (data.feedback_required || data.spam))) {
+        return { ok: false, blocked: true, status, message: msg || 'HTTP ' + status, attempts };
+      }
+      if (status === 401 || status === 403 || (data && data.require_login)) {
+        return { ok: false, status, message: 'AUTH', attempts };
+      }
+      // A 200 has come back both with and without status "ok", and neither has
+      // proven reliable, so any 200 is checked against the profile.
+      if (res && res.ok) {
+        await sleep(800);
+        const following = await stillFollowing(username);
+        if (following === false) return { ok: true, verified: true, attempts };
+        if (following === null) acceptedButUnverified = true;
+        // still following: this endpoint didn't really work, try the next one
+      }
+      await sleep(jitter(700, 1500));
+    }
+    if (acceptedButUnverified) {
+      // Couldn't confirm either way; one last check before giving up.
+      const following = await stillFollowing(username);
+      if (following !== true) return { ok: true, verified: false, attempts };
+    }
+    return { ok: false, message: 'NOT_APPLIED', attempts };
   }
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg && msg.type === 'igft-unfollow') {
-      unfollow(msg.id).then(sendResponse);
+      unfollow(msg.id, msg.username).then(sendResponse);
       return true; // async response
     }
     if (msg && msg.type === 'igft-pause') {

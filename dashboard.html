@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="he" dir="rtl">
+<html lang="en" dir="ltr">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -12,15 +12,15 @@
       <img src="icons/icon48.png" alt="" width="32" height="32">
       <div>
         <h1>Follow Tracker</h1>
-        <div class="sub" id="accountLine">עדיין לא בוצעה סריקה</div>
+        <div class="sub" id="accountLine" data-i18n="noScanYet"></div>
       </div>
     </div>
     <div class="actions">
       <select id="accountSelect" hidden></select>
-      <button id="scanBtn" class="primary">סרוק עכשיו</button>
-      <button id="restartBtn" hidden>התחל מחדש</button>
-      <button id="pauseBtn" hidden>השהה</button>
-      <button id="cancelBtn" hidden>עצור</button>
+      <button id="scanBtn" class="primary" data-i18n="scanNow"></button>
+      <button id="restartBtn" hidden data-i18n="restart"></button>
+      <button id="pauseBtn" hidden data-i18n="pause"></button>
+      <button id="cancelBtn" hidden data-i18n="stop"></button>
     </div>
   </header>
 
@@ -37,20 +37,21 @@
   <nav class="tabs" id="tabs"></nav>
 
   <section class="toolbar">
-    <input id="search" type="search" placeholder="חיפוש לפי שם משתמש או שם…">
-    <label class="chk"><input type="checkbox" id="hideVerified"> הסתר חשבונות מאומתים</label>
-    <button id="exportBtn">ייצוא CSV</button>
+    <input id="search" type="search" data-i18n-placeholder="searchPlaceholder">
+    <label class="chk"><input type="checkbox" id="hideVerified"> <span data-i18n="hideVerified"></span></label>
+    <button id="exportBtn" data-i18n="exportCsv"></button>
   </section>
 
   <p class="hint" id="tabHint"></p>
   <main id="list" class="list"></main>
-  <div class="more"><button id="moreBtn" hidden>הצג עוד</button></div>
+  <div class="more"><button id="moreBtn" hidden data-i18n="showMore"></button></div>
 
   <footer class="foot">
-    הנתונים נשמרים רק בדפדפן שלך. סריקות תכופות מדי עלולות לגרום לאינסטגרם להגביל את החשבון זמנית — מומלץ לסרוק פעם ביום לכל היותר.
-    <button id="clearBtn" class="link">מחק את כל הנתונים</button>
+    <span data-i18n="footer"></span>
+    <button id="clearBtn" class="link" data-i18n="clearAll"></button>
   </footer>
 
+  <script src="lib/i18n.js"></script>
   <script src="lib/core.js"></script>
   <script src="dashboard.js"></script>
 </body>

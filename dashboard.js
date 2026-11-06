@@ -2,22 +2,13 @@ const $ = (s) => document.querySelector(s);
 const PAGE = 300;
 const STALE_MS = 6 * 60 * 1000;
 
-const TABS = [
-  { id: 'notBack', label: 'לא עוקבים בחזרה', hint: 'אנשים שאתה עוקב אחריהם והם לא עוקבים אחריך (ללא הרשימה הלבנה).' },
-  { id: 'lost', label: 'הורידו לי עוקב', hint: 'מי שהפסיק לעקוב אחריך, לפי השוואה בין סריקות. חשבון שנמחק או הושבת יופיע גם כאן.' },
-  { id: 'gained', label: 'עוקבים חדשים', hint: 'מי שהתחיל לעקוב אחריך מאז הסריקות הקודמות.' },
-  { id: 'fans', label: 'אני לא עוקב בחזרה', hint: 'עוקבים אחריך, אבל אתה לא עוקב אחריהם.' },
-  { id: 'mutual', label: 'הדדיים', hint: 'אתם עוקבים זה אחרי זה.' },
-  { id: 'iUnfollowed', label: 'הפסקתי לעקוב', hint: 'חשבונות שאתה הפסקת לעקוב אחריהם בין סריקות.' },
-  { id: 'whitelist', label: 'רשימה לבנה', hint: 'חשבונות שסימנת ★ — הם לא יופיעו ב"לא עוקבים בחזרה" (למשל סלבריטאים ומותגים).' },
-  { id: 'history', label: 'היסטוריית סריקות', hint: '' },
-];
+const { t } = I18N;
+I18N.applyToDocument(document);
 
-const ERRORS = {
-  NOT_LOGGED_IN: 'לא נמצא משתמש מחובר. היכנס לאינסטגרם בלשונית ונסה שוב.',
-  AUTH: 'אינסטגרם דחה את הבקשה — ודא שאתה מחובר לחשבון בלשונית instagram.com.',
-  NO_TAB: 'לא הצלחתי לפתוח לשונית של אינסטגרם.',
-  STALE: 'הסריקה נקטעה (כנראה לשונית האינסטגרם נסגרה). נסה שוב.',
+const TAB_IDS = ['notBack', 'lost', 'gained', 'fans', 'mutual', 'iUnfollowed', 'whitelist', 'history'];
+const errText = (code) => {
+  const msg = t('err_' + code);
+  return msg === 'err_' + code ? code : msg;
 };
 
 let store = {};
@@ -60,8 +51,8 @@ function lists() {
 }
 
 // ---------- rendering ----------
-const fmtDate = (t) => new Date(t).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' });
-const fmtNum = (n) => (n ?? 0).toLocaleString('he-IL');
+const fmtDate = (ts) => new Date(ts).toLocaleString(I18N.locale, { dateStyle: 'short', timeStyle: 'short' });
+const fmtNum = (n) => (n ?? 0).toLocaleString(I18N.locale);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 function render() {
@@ -81,8 +72,8 @@ function renderHeader() {
   sel.innerHTML = ids.map((id) => `<option value="${id}" ${id === accountId ? 'selected' : ''}>@${esc(store['acct_' + id].username)}</option>`).join('');
   const acct = account();
   $('#accountLine').textContent = acct
-    ? `@${acct.username} · סריקה אחרונה: ${fmtDate(acct.lastScan)} · ${acct.history.length} סריקות`
-    : 'עדיין לא בוצעה סריקה — לחץ "סרוק עכשיו" (צריך להיות מחובר לאינסטגרם בדפדפן הזה)';
+    ? t('accountLine', { user: acct.username, date: fmtDate(acct.lastScan), n: acct.history.length })
+    : t('noScanHeader');
 }
 
 function scanState() {
@@ -108,30 +99,28 @@ function renderProgress() {
   const canResume = !running && !!ck;
   $('#scanBtn').disabled = running;
   $('#scanBtn').textContent = canResume
-    ? `המשך סריקה (${fmtNum(ck.followers.length + ck.following.length)} נסרקו)`
-    : 'סרוק עכשיו';
+    ? t('resumeScan', { n: fmtNum(ck.followers.length + ck.following.length) })
+    : t('scanNow');
   $('#restartBtn').hidden = !canResume;
   $('#pauseBtn').hidden = !running;
-  $('#pauseBtn').textContent = isPaused ? 'המשך' : 'השהה';
+  $('#pauseBtn').textContent = isPaused ? t('resume') : t('pause');
   $('#pauseBtn').classList.toggle('primary', isPaused);
   $('#cancelBtn').hidden = !running;
   $('#progress').hidden = !running;
   if (running) {
-    const phase = { init: 'מתחבר…', followers: 'סורק עוקבים', following: 'סורק נעקבים' }[s.phase] || '';
-    let text = (isPaused ? '⏸ מושהה · ' : '') + phase;
+    const phase = s.phase ? t('phase_' + s.phase) : '';
+    let text = (isPaused ? t('pausedPrefix') : '') + phase;
     if (s.phase === 'followers' || s.phase === 'following') {
-      text += `: ${fmtNum(s.done)}` + (s.total ? ` מתוך ${fmtNum(s.total)}` : '');
+      text += `: ${fmtNum(s.done)}` + (s.total ? t('progressOf', { total: fmtNum(s.total) }) : '');
     }
     if (s.waitingUntil && s.waitingUntil > Date.now()) {
       const sec = Math.ceil((s.waitingUntil - Date.now()) / 1000);
       text += s.waitReason === 'rate'
-        ? ` · אינסטגרם ביקש להאט, ממשיך בעוד ${sec} שניות`
-        : ` · שגיאה זמנית, מנסה שוב בעוד ${sec} שניות`;
+        ? t('waitRate', { sec })
+        : t('waitRetry', { sec });
       if (s.lastProblem) text += ` (${s.lastProblem})`;
     }
-    $('#progressText').textContent = text + (isPaused
-      ? ' — לחץ "המשך" כדי להמשיך מאותה נקודה.'
-      : ' — אפשר להמשיך לגלוש, אל תסגור את לשונית האינסטגרם.');
+    $('#progressText').textContent = text + (isPaused ? t('tailPaused') : t('tailRunning'));
     const fill = $('#progressFill');
     if (s.total && (s.phase === 'followers' || s.phase === 'following')) {
       fill.classList.remove('indeterminate');
@@ -148,19 +137,18 @@ function renderProgress() {
   if (s && s.status === 'error') {
     msg.hidden = false;
     msg.className = 'message error';
-    msg.textContent = 'הסריקה נכשלה: ' + (ERRORS[s.error] || s.error) +
-      (canResume ? ' · ההתקדמות נשמרה, אפשר ללחוץ "המשך סריקה".' : '');
+    msg.textContent = t('scanFailed', { why: errText(s.error) }) + (canResume ? t('progressSaved') : '');
   } else if (s && s.status === 'cancelled' && canResume) {
     msg.hidden = false;
     msg.className = 'message';
-    msg.textContent = 'הסריקה נעצרה. ההתקדמות נשמרה, לחץ "המשך סריקה" כדי להמשיך מאותה נקודה, או "התחל מחדש".';
+    msg.textContent = t('scanStopped');
   } else if (s && s.status === 'done' && s.summary && Date.now() - s.finishedAt < 10 * 60 * 1000) {
     const x = s.summary;
     msg.hidden = false;
     msg.className = 'message ok';
     msg.textContent = x.first
-      ? `הסריקה הראשונה הושלמה: ${fmtNum(x.followers)} עוקבים, ${fmtNum(x.following)} נעקבים. מהסריקה הבאה אוכל להראות מי הוריד לך עוקב.`
-      : `הסריקה הושלמה: ${fmtNum(x.lost)} הורידו לך עוקב, ${fmtNum(x.gained)} עוקבים חדשים.`;
+      ? t('firstScanDone', { followers: fmtNum(x.followers), following: fmtNum(x.following) })
+      : t('scanDone', { lost: fmtNum(x.lost), gained: fmtNum(x.gained) });
   }
 }
 
@@ -173,12 +161,12 @@ function renderStats(acct, L) {
     return d ? ` <span class="${d > 0 ? 'up' : 'down'}" style="font-size:13px">${d > 0 ? '+' : ''}${d}</span>` : '';
   };
   const tiles = [
-    { lbl: 'עוקבים', num: fmtNum(acct.followers.length) + delta(acct.followers.length, 'followers'), tab: 'fans', raw: true },
-    { lbl: 'נעקבים', num: fmtNum(acct.following.length) + delta(acct.following.length, 'following'), tab: 'mutual', raw: true },
-    { lbl: 'לא עוקבים בחזרה', num: fmtNum(L.notBack.length), tab: 'notBack', cls: 'bad' },
-    { lbl: 'הורידו לי עוקב (סה"כ)', num: fmtNum(L.lost.length), tab: 'lost', cls: 'bad' },
-    { lbl: 'עוקבים חדשים (סה"כ)', num: fmtNum(L.gained.length), tab: 'gained', cls: 'good' },
-    { lbl: 'הדדיים', num: fmtNum(L.mutual.length), tab: 'mutual' },
+    { lbl: t('stat_followers'), num: fmtNum(acct.followers.length) + delta(acct.followers.length, 'followers'), tab: 'fans' },
+    { lbl: t('stat_following'), num: fmtNum(acct.following.length) + delta(acct.following.length, 'following'), tab: 'mutual' },
+    { lbl: t('stat_notBack'), num: fmtNum(L.notBack.length), tab: 'notBack', cls: 'bad' },
+    { lbl: t('stat_lost'), num: fmtNum(L.lost.length), tab: 'lost', cls: 'bad' },
+    { lbl: t('stat_gained'), num: fmtNum(L.gained.length), tab: 'gained', cls: 'good' },
+    { lbl: t('stat_mutual'), num: fmtNum(L.mutual.length), tab: 'mutual' },
   ];
   $('#stats').innerHTML = tiles.map((t) =>
     `<div class="stat" data-tab="${t.tab}"><div class="num ${t.cls || ''}">${t.num}</div><div class="lbl">${t.lbl}</div></div>`
@@ -186,11 +174,11 @@ function renderStats(acct, L) {
 }
 
 function renderTabs(L) {
-  $('#tabs').innerHTML = TABS.map((t) => {
-    const n = L && L[t.id] ? `<span class="count">${fmtNum(L[t.id].length)}</span>` : '';
-    return `<button data-tab="${t.id}" class="${t.id === tab ? 'active' : ''}">${t.label}${n}</button>`;
+  $('#tabs').innerHTML = TAB_IDS.map((id) => {
+    const n = L && L[id] ? `<span class="count">${fmtNum(L[id].length)}</span>` : '';
+    return `<button data-tab="${id}" class="${id === tab ? 'active' : ''}">${esc(t('tab_' + id))}${n}</button>`;
   }).join('');
-  $('#tabHint').textContent = (TABS.find((t) => t.id === tab) || {}).hint || '';
+  $('#tabHint').textContent = t('hint_' + tab);
 }
 
 function filtered(acct, L) {
@@ -211,19 +199,19 @@ function renderList(acct, L) {
   $('#moreBtn').hidden = true;
 
   if (!acct) {
-    list.innerHTML = '<div class="empty">אין עדיין נתונים. לחץ "סרוק עכשיו" כדי להתחיל.</div>';
+    list.innerHTML = `<div class="empty">${esc(t('emptyNoData'))}</div>`;
     return;
   }
   if (tab === 'history') return renderHistory(acct);
 
   if ((tab === 'lost' || tab === 'gained' || tab === 'iUnfollowed') && acct.history.length < 2 && !(L[tab] || []).length) {
-    list.innerHTML = '<div class="empty">צריך לפחות שתי סריקות כדי לזהות שינויים. סרוק שוב מחר.</div>';
+    list.innerHTML = `<div class="empty">${esc(t('emptyNeedTwo'))}</div>`;
     return;
   }
 
   const items = filtered(acct, L);
   if (!items.length) {
-    list.innerHTML = '<div class="empty">אין כאן אף אחד 🎉</div>';
+    list.innerHTML = `<div class="empty">${esc(t('emptyList'))}</div>`;
     return;
   }
   const wl = whitelist();
@@ -236,10 +224,11 @@ function renderList(acct, L) {
     const avatar = ready
       ? `<div class="avatar"><img src="${ready}" alt=""></div>`
       : `<div class="avatar" data-pic="${item.id}">${initial}</div>`;
-    const badges = (u.v ? '<span class="badge">מאומת</span>' : '') + (u.p ? '<span class="badge">פרטי</span>' : '');
+    const badge = (key) => `<span class="badge">${esc(t(key))}</span>`;
+    const badges = (u.v ? badge('badgeVerified') : '') + (u.p ? badge('badgePrivate') : '');
     let status = '';
-    if (tab === 'lost') status = following.has(item.id) ? '<span class="badge">אתה עדיין עוקב</span>' : '';
-    if (tab === 'lost' && followers.has(item.id)) status = '<span class="badge">חזר לעקוב</span>';
+    if (tab === 'lost') status = following.has(item.id) ? badge('badgeStillFollowing') : '';
+    if (tab === 'lost' && followers.has(item.id)) status = badge('badgeFollowsAgain');
     const starred = wl.has(item.id);
     return `<div class="row">
       ${avatar}
@@ -249,20 +238,20 @@ function renderList(acct, L) {
       </div>
       ${item.t ? `<span class="when">${fmtDate(item.t)}</span>` : ''}
       ${unfollowButton(item.id, following)}
-      <button data-star="${item.id}" title="${starred ? 'הסר מהרשימה הלבנה' : 'הוסף לרשימה הלבנה'}">${starred ? '★' : '☆'}</button>
+      <button data-star="${item.id}" title="${esc(starred ? t('wlRemove') : t('wlAdd'))}">${starred ? '★' : '☆'}</button>
     </div>`;
   }).join('');
   observePics(acct);
   if (items.length > limit) {
     $('#moreBtn').hidden = false;
-    $('#moreBtn').textContent = `הצג עוד (${fmtNum(items.length - limit)} נוספים)`;
+    $('#moreBtn').textContent = t('showMoreN', { n: fmtNum(items.length - limit) });
   }
 }
 
 function unfollowButton(id, following) {
   const st = unfollowState.get(id);
   if (!following.has(id) && st !== 'working') return '';
-  const label = { queued: 'בתור…', working: 'מבטל…', error: 'נכשל, נסה שוב' }[st] || 'הפסק לעקוב';
+  const label = t({ queued: 'unfollowQueued', working: 'unfollowWorking', error: 'unfollowFailed' }[st] || 'unfollow');
   const busy = st === 'queued' || st === 'working';
   return `<button class="danger" data-unfollow="${id}" ${busy ? 'disabled' : ''}>${label}</button>`;
 }
@@ -278,7 +267,7 @@ function renderHistory(acct) {
     return `<tr><td>${fmtDate(h.t)}</td><td>${fmtNum(h.followers)}${d('followers')}</td><td>${fmtNum(h.following)}${d('following')}</td>
       <td class="${h.lost ? 'down' : ''}">${h.first ? '—' : fmtNum(h.lost)}</td><td class="${h.gained ? 'up' : ''}">${h.first ? '—' : fmtNum(h.gained)}</td></tr>`;
   }).join('');
-  $('#list').innerHTML = `<table class="hist"><thead><tr><th>תאריך</th><th>עוקבים</th><th>נעקבים</th><th>הורידו עוקב</th><th>עוקבים חדשים</th></tr></thead><tbody>${rows}</tbody></table>`;
+  $('#list').innerHTML = `<table class="hist"><thead><tr>${['th_date', 'th_followers', 'th_following', 'th_lost', 'th_gained'].map((k) => `<th>${esc(t(k))}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 // ---------- profile pictures ----------
@@ -395,7 +384,7 @@ async function startScan(resume) {
     const tabId = await ensureScanner();
     await chrome.tabs.sendMessage(tabId, { type: 'igft-scan', resume });
   } catch (e) {
-    await chrome.storage.local.set({ scanState: { status: 'error', error: ERRORS[e.message] ? e.message : String(e.message || e), updated: Date.now() } });
+    await chrome.storage.local.set({ scanState: { status: 'error', error: String(e.message || e), updated: Date.now() } });
   }
 }
 
@@ -453,10 +442,13 @@ async function pumpUnfollow() {
       let result;
       try {
         const tabId = await ensureScanner();
-        result = await chrome.tabs.sendMessage(tabId, { type: 'igft-unfollow', id });
+        await chrome.runtime.sendMessage({ type: 'igft-expect-unfollow', id }).catch(() => {});
+        const username = account() && account().users[id] && account().users[id].u;
+        result = await chrome.tabs.sendMessage(tabId, { type: 'igft-unfollow', id, username });
       } catch (e) {
-        result = { ok: false, message: ERRORS[e.message] || String(e.message || e) };
+        result = { ok: false, message: String(e.message || e) };
       }
+      if (result && result.attempts) console.info('IGFT unfollow', id, result);
       lastUnfollowAt = Date.now();
       const name = '@' + ((account() && account().users[id] && account().users[id].u) || id);
       if (result && result.ok) {
@@ -465,16 +457,17 @@ async function pumpUnfollow() {
         const acct = (await chrome.storage.local.get(key))[key];
         const updated = IGFT.applyLiveChange(acct, 'unfollow', id, Date.now());
         if (updated) await chrome.storage.local.set({ [key]: updated });
-        notice(`הפסקת לעקוב אחרי ${name}` + (unfollowQueue.length ? ` · עוד ${unfollowQueue.length} בתור` : ''), 'ok');
+        notice(t(result.verified === false ? 'unfollowDoneUnverified' : 'unfollowDone', { name }) +
+          (unfollowQueue.length ? t('unfollowQueueLeft', { n: unfollowQueue.length }) : ''), 'ok');
       } else {
         unfollowState.set(id, 'error');
-        const why = (result && result.message) || 'שגיאה לא ידועה';
+        const why = result && result.message ? errText(result.message) : t('err_unknown');
         if (result && (result.blocked || result.status === 429)) {
           // Stop everything: continuing would make the block longer.
           for (const q of unfollowQueue.splice(0)) unfollowState.delete(q);
-          notice(`אינסטגרם חסם זמנית הפסקות מעקב (${why}). כדאי לחכות כמה שעות לפני שממשיכים.`, 'error');
+          notice(t('unfollowBlocked', { why }), 'error');
         } else {
-          notice(`לא הצלחתי להפסיק לעקוב אחרי ${name}: ${why}`, 'error');
+          notice(t('unfollowError', { name, why }), 'error');
         }
       }
       render();
@@ -538,7 +531,7 @@ $('#pauseBtn').addEventListener('click', togglePause);
 $('#cancelBtn').addEventListener('click', cancelScan);
 $('#accountSelect').addEventListener('change', (e) => { accountId = e.target.value; render(); });
 $('#clearBtn').addEventListener('click', async () => {
-  if (!confirm('למחוק את כל הסריקות, ההיסטוריה והרשימה הלבנה?')) return;
+  if (!confirm(t('clearConfirm'))) return;
   await chrome.storage.local.clear();
   await caches.delete(PIC_CACHE);
   picUrls.clear();

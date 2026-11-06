@@ -235,36 +235,62 @@
   }
 
   // ---------- unfollow ----------
-  // Instagram has moved its unfollow endpoint over time, and a 200 "ok" alone
-  // has proven not to mean the unfollow happened. So each known endpoint is
-  // tried in turn, and after each one the profile is re-read to confirm that
-  // you no longer follow the account.
+  // Guessed endpoints have proven unreliable: Instagram can answer 200 and
+  // still not unfollow. So:
+  //  1. If you have unfollowed someone by hand on instagram.com, background.js
+  //     recorded that exact request (URL, headers, body) as a template, and it
+  //     is replayed first with the new user id.
+  //  2. Otherwise / then, the known endpoints are tried.
+  //  3. After every attempt, your "following" list is searched for the account
+  //     (the same request the scan uses) to confirm it is really gone.
   const UNFOLLOW_ENDPOINTS = [
+    (id) => `/api/v1/friendships/destroy/${id}/`,
     (id) => `/api/v1/web/friendships/${id}/unfollow/`,
     (id) => `/web/friendships/${id}/unfollow/`,
-    (id) => `/api/v1/friendships/destroy/${id}/`,
   ];
+
+  const wwwClaim = () => {
+    try { return sessionStorage.getItem('www-claim-v2') || '0'; } catch { return '0'; }
+  };
 
   const postHeaders = () => ({
     'X-IG-App-ID': APP_ID,
     'X-CSRFToken': cookie('csrftoken'),
+    'X-IG-WWW-Claim': wwwClaim(),
     'X-Requested-With': 'XMLHttpRequest',
-    'X-Instagram-AJAX': '1',
     'X-ASBD-ID': '129477',
     'Content-Type': 'application/x-www-form-urlencoded',
   });
 
+  async function getJson(url) {
+    const res = await fetch(url, {
+      credentials: 'include',
+      cache: 'no-store',
+      headers: { 'X-IG-App-ID': APP_ID, 'X-IG-WWW-Claim': wwwClaim(), 'X-Requested-With': 'XMLHttpRequest' },
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  }
+
   // true = still following, false = not following, null = couldn't tell.
-  async function stillFollowing(username) {
+  async function stillFollowing(id, username) {
+    const myId = cookie('ds_user_id');
+    if (username && myId) {
+      try {
+        const q = username.toLowerCase();
+        const d = await getJson(`/api/v1/friendships/${myId}/following/?count=50&query=${encodeURIComponent(username)}`);
+        const users = d.users || [];
+        if (users.some((u) => String(u.pk ?? u.pk_id ?? u.id) === String(id))) return true;
+        // Only trust "not found" if the search was really applied to the list.
+        const searched = users.every((u) => (u.username || '').toLowerCase().includes(q) || (u.full_name || '').toLowerCase().includes(q));
+        if (searched) return false;
+      } catch {
+        // fall back to the profile lookup
+      }
+    }
     if (!username) return null;
     try {
-      const res = await fetch(`/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`, {
-        credentials: 'include',
-        headers: { 'X-IG-App-ID': APP_ID, 'X-Requested-With': 'XMLHttpRequest' },
-        cache: 'no-store',
-      });
-      if (!res.ok) return null;
-      const u = (await res.json()).data.user;
+      const u = (await getJson(`/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`)).data.user;
       if (typeof u.followed_by_viewer !== 'boolean') return null;
       return u.followed_by_viewer || !!u.requested_by_viewer;
     } catch {
@@ -272,52 +298,87 @@
     }
   }
 
+  function requestFromTemplate(tpl, id) {
+    const swap = (str) => str.split(tpl.targetId).join(String(id));
+    const headers = {};
+    for (const [k, v] of Object.entries(tpl.headers || {})) {
+      const lk = k.toLowerCase();
+      if (lk === 'x-csrftoken' || lk === 'x-ig-www-claim') continue; // use fresh values
+      headers[k] = v;
+    }
+    headers['X-CSRFToken'] = cookie('csrftoken');
+    headers['X-IG-WWW-Claim'] = wwwClaim();
+    return {
+      label: 'learned:' + tpl.url.replace(/^https:\/\/www\.instagram\.com/, '').replace(tpl.targetId, '{id}'),
+      url: swap(tpl.url),
+      init: { method: 'POST', credentials: 'include', headers, body: tpl.body != null ? swap(tpl.body) : undefined },
+    };
+  }
+
+  function requestFromEndpoint(endpoint, id) {
+    return {
+      label: endpoint('{id}'),
+      url: endpoint(id),
+      init: {
+        method: 'POST',
+        credentials: 'include',
+        headers: postHeaders(),
+        body: new URLSearchParams({ user_id: String(id), container_module: 'profile', nav_chain: '' }),
+      },
+    };
+  }
+
   async function unfollow(id, username) {
     if (!/^\d+$/.test(String(id))) return { ok: false, message: 'bad id' };
     const attempts = [];
-    let acceptedButUnverified = false;
-    for (const endpoint of UNFOLLOW_ENDPOINTS) {
-      const url = endpoint(id);
+
+    // Maybe it already happened (e.g. an earlier attempt worked late).
+    const before = await stillFollowing(id, username);
+    attempts.push('pre-check following=' + before);
+    if (before === false) return { ok: true, verified: true, attempts };
+
+    const { unfollowTemplate: tpl } = await chrome.storage.local.get('unfollowTemplate');
+    const requests = [];
+    if (tpl && tpl.targetId && tpl.url) requests.push(requestFromTemplate(tpl, id));
+    for (const ep of UNFOLLOW_ENDPOINTS) requests.push(requestFromEndpoint(ep, id));
+
+    let unverified = false;
+    for (const r of requests) {
       let res = null;
       let data = null;
+      let text = '';
       try {
-        res = await fetch(url, {
-          method: 'POST',
-          credentials: 'include',
-          headers: postHeaders(),
-          body: new URLSearchParams({ user_id: String(id), container_module: 'profile', nav_chain: '' }),
-        });
-        data = await res.json();
+        res = await fetch(r.url, r.init);
+        text = await res.text();
+        try { data = JSON.parse(text); } catch { /* not JSON */ }
       } catch {
-        // network error or non-JSON reply
+        // network error
       }
       const status = res ? res.status : 0;
       const msg = (data && (data.feedback_message || data.message)) || '';
-      attempts.push(`${url.replace(/\d+/, '{id}')} → ${status}${data && data.status ? ' ' + data.status : ''}${msg ? ' ' + msg : ''}`);
+      const snippet = data ? JSON.stringify(data).slice(0, 160) : text.slice(0, 80);
+      attempts.push(`${r.label} → ${status} ${snippet}`);
 
       if (status === 429 || (data && (data.feedback_required || data.spam))) {
         return { ok: false, blocked: true, status, message: msg || 'HTTP ' + status, attempts };
       }
-      if (status === 401 || status === 403 || (data && data.require_login)) {
-        return { ok: false, status, message: 'AUTH', attempts };
-      }
-      // A 200 has come back both with and without status "ok", and neither has
-      // proven reliable, so any 200 is checked against the profile.
       if (res && res.ok) {
-        await sleep(800);
-        const following = await stillFollowing(username);
-        if (following === false) return { ok: true, verified: true, attempts };
-        if (following === null) acceptedButUnverified = true;
-        // still following: this endpoint didn't really work, try the next one
+        await sleep(1500);
+        const following = await stillFollowing(id, username);
+        attempts.push('  check following=' + following);
+        if (following === false) return { ok: true, verified: true, via: r.label, attempts };
+        if (following === null) unverified = true;
       }
       await sleep(jitter(700, 1500));
     }
-    if (acceptedButUnverified) {
-      // Couldn't confirm either way; one last check before giving up.
-      const following = await stillFollowing(username);
-      if (following !== true) return { ok: true, verified: false, attempts };
+    if (unverified) {
+      await sleep(2000);
+      const following = await stillFollowing(id, username);
+      attempts.push('final check following=' + following);
+      if (following === false) return { ok: true, verified: true, attempts };
+      if (following === null) return { ok: true, verified: false, attempts };
     }
-    return { ok: false, message: 'NOT_APPLIED', attempts };
+    return { ok: false, message: tpl ? 'NOT_APPLIED_LEARNED' : 'NEED_TEMPLATE', attempts };
   }
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {

@@ -96,3 +96,15 @@ test('Hebrew and English have the same UI strings', () => {
   assert.deepStrictEqual(Object.keys(STRINGS.he).sort(), Object.keys(STRINGS.en).sort());
   assert.match(t('unfollowError', { name: '@x', why: 'y' }), /@x.*y/);
 });
+
+test('parseFriendshipRequest recognises GraphQL follow mutations', () => {
+  const { parseFriendshipRequest } = require('../lib/core.js');
+  const body = (name, vars) => new URLSearchParams({ fb_api_req_friendly_name: name, variables: JSON.stringify(vars), doc_id: '1' }).toString();
+  const g = 'https://www.instagram.com/graphql/query';
+  assert.deepStrictEqual(parseFriendshipRequest(g, body('usePolarisUnfollowMutation', { target_user_id: '777' })), { action: 'unfollow', id: '777' });
+  assert.deepStrictEqual(parseFriendshipRequest(g, body('usePolarisFollowMutation', { target_user_id: '778' })), { action: 'follow', id: '778' });
+  assert.deepStrictEqual(parseFriendshipRequest(g, body('PolarisRemoveFollowerMutation', { input: { user_id: '779' } })), { action: 'removeFollower', id: '779' });
+  assert.strictEqual(parseFriendshipRequest(g, body('PolarisProfilePageQuery', { id: '1234' })), null);
+  // REST form still works without a body.
+  assert.deepStrictEqual(parseFriendshipRequest('https://www.instagram.com/api/v1/friendships/destroy/5/', null), { action: 'unfollow', id: '5' });
+});

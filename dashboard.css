@@ -139,3 +139,6 @@ table.hist th { color: var(--muted); font-weight: 600; font-size: 12px; }
 .avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
 button.danger { color: var(--bad); border-color: var(--bad); background: transparent; }
 button.danger:hover:not(:disabled) { background: var(--bad); color: var(--accent-text); }
+.hint.learn { margin-top: 0; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); }
+.hint.learn.ok { color: var(--good); border-color: var(--good); }
+.hint.learn.warn { color: var(--text); border-color: var(--accent); }

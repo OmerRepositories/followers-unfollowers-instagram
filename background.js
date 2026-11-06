@@ -73,8 +73,10 @@ chrome.webRequest.onCompleted.addListener(
   (details) => {
     const entry = inFlight.get(details.requestId);
     inFlight.delete(details.requestId);
-    if (details.method !== 'POST' || details.statusCode !== 200) return;
+    if (details.method !== 'POST') return;
     const hit = IGFT.parseFriendshipRequest(details.url, entry && entry.body);
+    queue = queue.then(() => logPost(details, entry, hit)).catch(() => {});
+    if (details.statusCode !== 200) return;
     if (!hit) return;
     const until = handledByDashboard.get(hit.id);
     if (until && until > Date.now()) return; // the dashboard's own attempt
@@ -88,6 +90,19 @@ chrome.webRequest.onCompleted.addListener(
   },
   { urls: WATCH_URLS }
 );
+
+// Short log of recent POSTs to instagram.com (path + GraphQL operation name
+// only, no tokens or bodies), so a missed unfollow can be diagnosed.
+const NOISE = /\/(logging|ajax\/bz|falco|qp\/|bz)\b|\/ajax\/|\/log\//;
+async function logPost(details, entry, hit) {
+  const path = new URL(details.url).pathname;
+  if (NOISE.test(path)) return;
+  let name = '';
+  try { name = new URLSearchParams((entry && entry.body) || '').get('fb_api_req_friendly_name') || ''; } catch { /* not form data */ }
+  const { recentPosts = [] } = await chrome.storage.local.get('recentPosts');
+  recentPosts.unshift({ t: Date.now(), path, name, status: details.statusCode, recognized: hit ? hit.action : null });
+  await chrome.storage.local.set({ recentPosts: recentPosts.slice(0, 25) });
+}
 
 async function saveTemplate(url, entry, targetId) {
   const headers = {};

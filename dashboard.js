@@ -179,6 +179,11 @@ function renderTabs(L) {
     return `<button data-tab="${id}" class="${id === tab ? 'active' : ''}">${esc(t('tab_' + id))}${n}</button>`;
   }).join('');
   $('#tabHint').textContent = t('hint_' + tab);
+  const learn = $('#learnStatus');
+  const tpl = store.unfollowTemplate;
+  learn.hidden = !account() || tab === 'history' || tab === 'fans' || tab === 'gained';
+  learn.className = 'hint learn ' + (tpl ? 'ok' : 'warn');
+  learn.textContent = tpl ? t('learnedYes', { date: fmtDate(tpl.savedAt) }) : t('learnedNo');
 }
 
 function filtered(acct, L) {
@@ -449,6 +454,7 @@ async function pumpUnfollow() {
         result = { ok: false, message: String(e.message || e) };
       }
       if (result && result.attempts) console.info('IGFT unfollow', id, result);
+      if (result && !result.ok) console.info('IGFT recent instagram.com POST requests', (await chrome.storage.local.get('recentPosts')).recentPosts);
       lastUnfollowAt = Date.now();
       const name = '@' + ((account() && account().users[id] && account().users[id].u) || id);
       if (result && result.ok) {
@@ -541,6 +547,8 @@ $('#clearBtn').addEventListener('click', async () => {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
   // Only the progress changed: avoid re-rendering the whole list.
+  // The request log changes all the time and isn't shown; ignore it.
+  if (Object.keys(changes).every((k) => k === 'recentPosts')) return;
   if (Object.keys(changes).every((k) => k === 'scanState' || k === 'scanCheckpoint')) {
     for (const k of Object.keys(changes)) store[k] = changes[k].newValue;
     renderProgress();

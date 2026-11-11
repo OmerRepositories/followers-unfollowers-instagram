@@ -1,5 +1,12 @@
 importScripts('lib/core.js');
 
+// Move accounts saved by older versions to the split layout (see core.js).
+async function migrateStorage() {
+  const set = IGFT.migrateAccounts(await chrome.storage.local.get(null));
+  if (Object.keys(set).length) await chrome.storage.local.set(set);
+}
+chrome.runtime.onInstalled.addListener(() => { migrateStorage().catch((e) => console.warn('IGFT migration failed', e)); });
+
 // Clicking the toolbar icon opens (or focuses) the dashboard tab.
 chrome.action.onClicked.addListener(async () => {
   const url = chrome.runtime.getURL('dashboard.html');
@@ -120,7 +127,10 @@ async function applyLive({ action, id }) {
   const myId = cookie && cookie.value;
   if (!myId) return;
   const key = 'acct_' + myId;
-  const account = (await chrome.storage.local.get(key))[key];
-  const updated = IGFT.applyLiveChange(account, action, id, Date.now());
+  // Profiles are only needed to decide whether a follow can be shown.
+  const usersKey = 'users_' + myId;
+  const got = await chrome.storage.local.get(action === 'follow' ? [key, usersKey] : [key]);
+  const account = got[key];
+  const updated = IGFT.applyLiveChange(account, action, id, Date.now(), got[usersKey]);
   if (updated) await chrome.storage.local.set({ [key]: updated });
 }

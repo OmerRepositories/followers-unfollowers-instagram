@@ -108,3 +108,66 @@ test('parseFriendshipRequest recognises GraphQL follow mutations', () => {
   // REST form still works without a body.
   assert.deepStrictEqual(parseFriendshipRequest('https://www.instagram.com/api/v1/friendships/destroy/5/', null), { action: 'unfollow', id: '5' });
 });
+
+test('slimUser accepts both raw API users and already-slim users', () => {
+  const { slimUser } = require('../lib/core.js');
+  const slim = slimUser({ pk: 5, username: 'a', full_name: 'A', profile_pic_url: 'p', is_verified: true, is_private: false });
+  assert.deepStrictEqual(slim, { id: '5', u: 'a', n: 'A', pic: 'p', v: true, p: false });
+  assert.deepStrictEqual(slimUser(slim), slim);
+});
+
+test('splitAccount and migrateAccounts move profiles to their own key', () => {
+  const { splitAccount, migrateAccounts } = require('../lib/core.js');
+  const acct = applyScan(null, buildSnapshot([u(1, 'a')], [u(2, 'b')]), 100).account;
+  const { meta, users } = splitAccount(acct);
+  assert.strictEqual(meta.users, undefined);
+  assert.deepStrictEqual(meta.followers, ['1']);
+  assert.strictEqual(users['2'].u, 'b');
+
+  const set = migrateAccounts({ acct_9: acct, wl_9: ['1'], scanState: {} });
+  assert.deepStrictEqual(Object.keys(set).sort(), ['acct_9', 'users_9']);
+  assert.strictEqual(set.acct_9.users, undefined);
+  assert.strictEqual(set.users_9['1'].u, 'a');
+  // Already migrated: nothing to do.
+  assert.deepStrictEqual(migrateAccounts({ acct_9: set.acct_9, users_9: set.users_9 }), {});
+});
+
+test('applyLiveChange can take the profiles separately', () => {
+  const acct = { followers: [], following: [], events: [] };
+  assert.strictEqual(applyLiveChange(acct, 'follow', '1', 1), null);
+  assert.deepStrictEqual(applyLiveChange(acct, 'follow', '1', 1, { 1: { id: '1', u: 'a' } }).following, ['1']);
+});
+
+test('checkpoint chunks are reassembled in order and validated', () => {
+  const { chunkKey, checkpointKeys, checkpointCount, assembleCheckpoint } = require('../lib/core.js');
+  const meta = { phase: 'following', maxId: 'x', counts: { followers: 3, following: 1 }, chunks: { followers: 2, following: 1 } };
+  assert.deepStrictEqual(checkpointKeys(meta), ['ckp_followers_0', 'ckp_followers_1', 'ckp_following_0']);
+  assert.strictEqual(checkpointCount(meta), 4);
+  const items = {
+    [chunkKey('followers', 0)]: [{ id: '1', u: 'a' }, { id: '2', u: 'b' }],
+    [chunkKey('followers', 1)]: [{ id: '3', u: 'c' }],
+    [chunkKey('following', 0)]: [{ id: '9', u: 'z' }],
+  };
+  const r = assembleCheckpoint(meta, items);
+  assert.deepStrictEqual(r.collected.followers.map((x) => x.id), ['1', '2', '3']);
+  assert.deepStrictEqual(r.collected.following.map((x) => x.id), ['9']);
+  // A missing chunk or a wrong count means the checkpoint can't be trusted.
+  assert.strictEqual(assembleCheckpoint(meta, { ...items, ckp_followers_1: undefined }), null);
+  assert.strictEqual(assembleCheckpoint({ ...meta, counts: { followers: 5, following: 1 } }, items), null);
+  // Snapshot works on the slim users the checkpoint holds.
+  const s = buildSnapshot(r.collected.followers, r.collected.following);
+  assert.deepStrictEqual(s.followers, ['1', '2', '3']);
+  assert.strictEqual(s.users['9'].u, 'z');
+});
+
+test('checkpoint saved by an older version (lists inside the record) still resumes', () => {
+  const { assembleCheckpoint, checkpointCount, checkpointKeys } = require('../lib/core.js');
+  const old = { phase: 'followers', maxId: 'm', followers: [u(1, 'a'), u(2, 'b')], following: [] };
+  assert.strictEqual(checkpointCount(old), 2);
+  assert.deepStrictEqual(checkpointKeys(old), []);
+  const r = assembleCheckpoint(old, {});
+  assert.deepStrictEqual(r.collected.followers.map((x) => x.id), ['1', '2']);
+  assert.deepStrictEqual(r.meta.counts, { followers: 0, following: 0 });
+  assert.strictEqual(r.meta.followers, undefined);
+  assert.strictEqual(r.meta.maxId, 'm');
+});

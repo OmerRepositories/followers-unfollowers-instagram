@@ -17,8 +17,23 @@ let tab = 'notBack';
 let limit = PAGE;
 
 // ---------- data ----------
+// Storage is read once; after that only the keys reported by
+// storage.onChanged are updated in `store`.
+const isChunk = (k) => k.startsWith('ckp_');
+
 async function load() {
-  store = await chrome.storage.local.get(null);
+  const all = await chrome.storage.local.get(null);
+  const migration = IGFT.migrateAccounts(all);
+  if (Object.keys(migration).length) {
+    Object.assign(all, migration);
+    await chrome.storage.local.set(migration);
+  }
+  store = {};
+  for (const [k, v] of Object.entries(all)) if (!isChunk(k)) store[k] = v;
+  refresh();
+}
+
+function refresh() {
   const ids = accountIds();
   if (!accountId || !ids.includes(accountId)) {
     accountId = ids.includes(store.lastAccount) ? store.lastAccount : ids[0] || null;
@@ -27,7 +42,17 @@ async function load() {
 }
 
 const accountIds = () => Object.keys(store).filter((k) => k.startsWith('acct_')).map((k) => k.slice(5));
-const account = () => (accountId ? store['acct_' + accountId] : null);
+
+// The account record joined with its profiles (kept under a separate key).
+// Cached so the same object is returned until either part changes.
+let joined = { acct: null, users: null, value: null };
+function account() {
+  const acct = accountId ? store['acct_' + accountId] : null;
+  if (!acct) return null;
+  const users = store['users_' + accountId] || acct.users || {};
+  if (joined.acct !== acct || joined.users !== users) joined = { acct, users, value: { ...acct, users } };
+  return joined.value;
+}
 const whitelist = () => new Set(store['wl_' + accountId] || []);
 
 async function setWhitelist(set) {
@@ -99,7 +124,7 @@ function renderProgress() {
   const canResume = !running && !!ck;
   $('#scanBtn').disabled = running;
   $('#scanBtn').textContent = canResume
-    ? t('resumeScan', { n: fmtNum(ck.followers.length + ck.following.length) })
+    ? t('resumeScan', { n: fmtNum(IGFT.checkpointCount(ck)) })
     : t('scanNow');
   $('#restartBtn').hidden = !canResume;
   $('#pauseBtn').hidden = !running;
@@ -546,17 +571,20 @@ $('#clearBtn').addEventListener('click', async () => {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
-  // Only the progress changed: avoid re-rendering the whole list.
-  // The request log changes all the time and isn't shown; ignore it.
-  if (Object.keys(changes).every((k) => k === 'recentPosts')) return;
-  if (Object.keys(changes).every((k) => k === 'scanState' || k === 'scanCheckpoint')) {
-    for (const k of Object.keys(changes)) store[k] = changes[k].newValue;
-    renderProgress();
-    const st = store.scanState && store.scanState.status;
-    if (changes.scanState && st !== 'running' && st !== 'paused') load();
-    return;
+  // The request log and the checkpoint chunks aren't shown; ignore them.
+  let relevant = false;
+  let progressOnly = true;
+  for (const [k, c] of Object.entries(changes)) {
+    if (k === 'recentPosts' || isChunk(k)) continue;
+    relevant = true;
+    if ('newValue' in c) store[k] = c.newValue;
+    else delete store[k];
+    if (k !== 'scanState' && k !== 'scanCheckpoint') progressOnly = false;
   }
-  load();
+  if (!relevant) return;
+  // Only the progress changed: avoid re-rendering the whole list.
+  if (progressOnly) renderProgress();
+  else refresh();
 });
 // Keep the "retrying in N seconds" countdown ticking.
 setInterval(() => {

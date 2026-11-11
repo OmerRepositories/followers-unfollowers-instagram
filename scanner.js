@@ -81,21 +81,33 @@
   let paused = false;
   const CHECKPOINT_KEY = 'scanCheckpoint';
   const CHECKPOINT_MAX_AGE = 24 * 60 * 60 * 1000;
+  // checkpoint: the small record saved under CHECKPOINT_KEY (phase, maxId,
+  // counts and chunks per list). collected: the users gathered so far, in memory.
   let checkpoint = null;
+  let collected = null;
   let pagesSinceSave = 0;
 
-  const keepFields = (u) => ({
-    pk: u.pk ?? u.pk_id ?? u.id,
-    username: u.username,
-    full_name: u.full_name,
-    profile_pic_url: u.profile_pic_url,
-    is_verified: u.is_verified,
-    is_private: u.is_private,
-  });
-
+  // Writes only the users added since the last save, as a new chunk key,
+  // together with the updated record, in one storage call.
   async function saveCheckpoint() {
     pagesSinceSave = 0;
-    if (checkpoint) await chrome.storage.local.set({ [CHECKPOINT_KEY]: { ...checkpoint, savedAt: Date.now() } });
+    if (!checkpoint) return;
+    const items = {};
+    for (const kind of ['followers', 'following']) {
+      const list = collected[kind];
+      const from = checkpoint.counts[kind];
+      if (list.length > from) {
+        items[IGFT.chunkKey(kind, checkpoint.chunks[kind])] = list.slice(from);
+        checkpoint.chunks[kind]++;
+        checkpoint.counts[kind] = list.length;
+      }
+    }
+    items[CHECKPOINT_KEY] = { ...checkpoint, savedAt: Date.now() };
+    await chrome.storage.local.set(items);
+  }
+
+  async function clearCheckpoint(meta) {
+    await chrome.storage.local.remove([CHECKPOINT_KEY, ...IGFT.checkpointKeys(meta)]);
   }
 
   async function checkPause() {
@@ -113,7 +125,7 @@
   }
 
   async function fetchList(userId, kind) {
-    const out = checkpoint[kind];
+    const out = collected[kind];
     let maxId = checkpoint.phase === kind ? checkpoint.maxId : null;
     await setState({ phase: kind, done: out.length, total: checkpoint.totals[kind] || null });
     do {
@@ -122,7 +134,7 @@
       if (kind === 'followers') url += '&search_surface=follow_list_page';
       if (maxId) url += '&max_id=' + encodeURIComponent(maxId);
       const data = await api(url);
-      out.push(...(data.users || []).map(keepFields));
+      out.push(...(data.users || []).map(IGFT.slimUser));
       maxId = data.next_max_id || null;
       checkpoint.phase = kind;
       checkpoint.maxId = maxId;
@@ -141,6 +153,7 @@
     paused = false;
     state = {};
     checkpoint = null;
+    collected = null;
     try {
       await setState({ status: 'running', phase: 'init', error: null, startedAt: Date.now(), resumed: false });
       const myId = cookie('ds_user_id');
@@ -148,11 +161,14 @@
 
       const saved = (await chrome.storage.local.get(CHECKPOINT_KEY))[CHECKPOINT_KEY];
       if (resume && saved && saved.accountId === myId && Date.now() - saved.startedAt < CHECKPOINT_MAX_AGE) {
-        checkpoint = saved;
-        await setState({ resumed: true });
-      } else {
-        await chrome.storage.local.remove(CHECKPOINT_KEY);
+        const restored = IGFT.assembleCheckpoint(saved, await chrome.storage.local.get(IGFT.checkpointKeys(saved)));
+        if (restored) {
+          checkpoint = restored.meta;
+          collected = restored.collected;
+          await setState({ resumed: true });
+        }
       }
+      if (!checkpoint) await clearCheckpoint(saved);
 
       if (!checkpoint) {
         // Username and totals are only for display and the progress bar, so each
@@ -182,9 +198,10 @@
           }
         }
         checkpoint = {
-          accountId: myId, username, totals, startedAt: Date.now(),
-          phase: 'followers', maxId: null, followers: [], following: [],
+          accountId: myId, username, totals, startedAt: Date.now(), phase: 'followers', maxId: null,
+          counts: { followers: 0, following: 0 }, chunks: { followers: 0, following: 0 },
         };
+        collected = { followers: [], following: [] };
         await saveCheckpoint();
       }
       const username = checkpoint.username;
@@ -200,14 +217,18 @@
       await fetchList(myId, 'following');
 
       const key = 'acct_' + myId;
-      const prev = (await chrome.storage.local.get(key))[key] || null;
-      const snapshot = IGFT.buildSnapshot(checkpoint.followers, checkpoint.following);
+      const usersKey = 'users_' + myId;
+      const got = await chrome.storage.local.get([key, usersKey]);
+      const prev = got[key] ? { ...got[key], users: got[usersKey] || got[key].users || {} } : null;
+      const snapshot = IGFT.buildSnapshot(collected.followers, collected.following);
       const { account, newEvents } = IGFT.applyScan(prev, snapshot, Date.now());
       account.id = myId;
       account.username = username || (prev && prev.username) || myId;
-      await chrome.storage.local.set({ [key]: account, lastAccount: myId });
-      await chrome.storage.local.remove(CHECKPOINT_KEY);
+      const { meta, users } = IGFT.splitAccount(account);
+      await chrome.storage.local.set({ [key]: meta, [usersKey]: users, lastAccount: myId });
+      await clearCheckpoint(checkpoint);
       checkpoint = null;
+      collected = null;
 
       await setState({
         status: 'done',
